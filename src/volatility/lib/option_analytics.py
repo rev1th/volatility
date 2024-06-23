@@ -11,13 +11,12 @@ logger = logging.Logger(__name__)
 # Standard log normal Black volatiity
 # https://github.com/vollib/lets_be_rational
 def get_implied_vol(option_price: float, forward_price: float, strike: float, expiry_dcf: float,
-                           flag: int = 1, rate: float = 0) -> float:
+                    flag: int = 1, rate: float = 0) -> float:
     fwd_premium = option_price / np.exp(-rate * expiry_dcf)
     return implied_volatility_from_a_transformed_rational_guess(
         fwd_premium, forward_price, strike, expiry_dcf, flag)
 
 # Black Scholes pricing for Eurpoean style options
-# https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.norm.html
 def get_d12(forward_price: float, strike: float, expiry_dcf: float, sigma: float) -> tuple[float, float]:
     x = np.log(forward_price / strike)
     y = sigma * np.sqrt(expiry_dcf)
@@ -27,6 +26,7 @@ def get_d12(forward_price: float, strike: float, expiry_dcf: float, sigma: float
     d2 = (x / y - y / 2)
     return d1, d2
 
+# https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.norm.html
 def get_price(forward_price: float, strike: float, expiry_dcf: float, sigma: float,
                      flag: int = 1, rate: float = 0) -> float:
     d1, d2 = get_d12(forward_price=forward_price, strike=strike, expiry_dcf=expiry_dcf, sigma=sigma)
@@ -44,6 +44,21 @@ def get_gamma(forward_price: float, strike: float, expiry_dcf: float, sigma: flo
 def get_vega(forward_price: float, strike: float, expiry_dcf: float, sigma: float) -> float:
     d1, _ = get_d12(forward_price, strike, expiry_dcf, sigma)
     return scst.norm.pdf(d1, loc=0, scale=1) * forward_price * np.sqrt(expiry_dcf)
+
+def get_delta_strike(forward_price: float, dcf: float, delta: float, sigma: float) -> float:
+    inv_n = scst.norm.ppf(abs(delta), loc=0, scale=1) * (-1 if delta < 0 else 1)
+    return forward_price * np.exp(sigma * (sigma * dcf / 2 - inv_n * np.sqrt(dcf)))
+
+# normalized monenyness
+def get_moneyness(forward_price: float, strike: float, dcf: float) -> float:
+    return np.log(strike / forward_price) / np.sqrt(dcf)
+
+def get_delta_moneyness(delta: float, dcf: float, sigma: float) -> float:
+    inv_n = scst.norm.ppf(abs(delta), loc=0, scale=1) * (-1 if delta < 0 else 1)
+    return sigma * (sigma * np.sqrt(dcf) / 2 - inv_n)
+
+def get_moneyness_strike(moneyness: float, forward_price: float, dcf: float) -> float:
+    return np.exp(moneyness * np.sqrt(dcf)) * forward_price
 
 
 # https://en.wikipedia.org/wiki/SABR_volatility_model

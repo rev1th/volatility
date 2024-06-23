@@ -1,5 +1,6 @@
 
 from pydantic.dataclasses import dataclass
+from typing import Union
 import datetime as dtm
 
 from common.models.base_instrument import BaseInstrumentP
@@ -55,7 +56,10 @@ class Option(BaseInstrumentP):
         return self.price and self.get_underlying_price() and self.price > self.get_intrinsic_value()
     
     def get_vol(self, vol_surface: VolSurfaceBase) -> float:
-        return vol_surface.get_vol(self.expiry, self.strike, self.get_underlying_price())
+        return vol_surface.get_date_strike_vol(self.expiry, self.strike, self.get_underlying_price())
+    
+    def get_moneyness(self) -> float:
+        return option_analytics.get_moneyness(self.get_underlying_price(), self.strike, self.get_expiry_dcf())
     
     def get_implied_vol(self, rate: float = 0) -> float:
         return option_analytics.get_implied_vol(
@@ -66,12 +70,13 @@ class Option(BaseInstrumentP):
                 rate=rate,
                 flag=self.flag)
     
-    def get_price(self, vol_surface: VolSurfaceBase, rate: float = 0) -> float:
+    def get_price(self, vol: Union[float, VolSurfaceBase], rate: float = 0) -> float:
+        sigma = self.get_vol(vol) if isinstance(vol, VolSurfaceBase) else vol
         return option_analytics.get_price(
                 forward_price=self.get_underlying_price(),
                 strike=self.strike,
                 expiry_dcf=self.get_expiry_dcf(),
-                sigma=self.get_vol(vol_surface),
+                sigma=sigma,
                 rate=rate,
                 flag=self.flag)
     
@@ -88,8 +93,7 @@ class Option(BaseInstrumentP):
                 forward_price=self.get_underlying_price(),
                 strike=self.strike,
                 expiry_dcf=self.get_expiry_dcf(),
-                sigma=self.get_vol(vol_surface),
-            )
+                sigma=self.get_vol(vol_surface))
 
 @dataclass
 class CallOption(Option):
