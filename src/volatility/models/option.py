@@ -1,14 +1,13 @@
-
 from pydantic.dataclasses import dataclass
 from typing import Union
 import datetime as dtm
 
 from common.models.base_instrument import BaseInstrumentP
-from common.chrono import DayCount
+from common.chrono.daycount import DayCount
 
 from .option_types import OptionType, OptionStyle
 from .vol_surface import VolSurfaceBase
-from volatility.lib import option_analytics
+from volatility.lib import black_scholes
 
 
 @dataclass
@@ -58,11 +57,12 @@ class Option(BaseInstrumentP):
     def get_vol(self, vol_surface: VolSurfaceBase) -> float:
         return vol_surface.get_date_strike_vol(self.expiry, self.strike, self.get_underlying_price())
     
-    def get_moneyness(self) -> float:
-        return option_analytics.get_moneyness(self.get_underlying_price(), self.strike, self.get_expiry_dcf())
+    def get_moneyness(self, moneyness_type) -> float:
+        return black_scholes.get_moneyness(forward_price=self.get_underlying_price(),
+                strike=self.strike, dcf=self.get_expiry_dcf(), moneyness_type=moneyness_type)
     
     def get_implied_vol(self, rate: float = 0) -> float:
-        return option_analytics.get_implied_vol(
+        return black_scholes.get_implied_vol(
                 option_price=self.price,
                 forward_price=self.get_underlying_price(),
                 strike=self.strike,
@@ -72,7 +72,7 @@ class Option(BaseInstrumentP):
     
     def get_price(self, vol: Union[float, VolSurfaceBase], rate: float = 0) -> float:
         sigma = self.get_vol(vol) if isinstance(vol, VolSurfaceBase) else vol
-        return option_analytics.get_price(
+        return black_scholes.get_price(
                 forward_price=self.get_underlying_price(),
                 strike=self.strike,
                 expiry_dcf=self.get_expiry_dcf(),
@@ -81,18 +81,18 @@ class Option(BaseInstrumentP):
                 flag=self.flag)
     
     def get_delta(self, vol_surface: VolSurfaceBase) -> float:
-        return option_analytics.get_delta(
+        return black_scholes.get_delta(
                 forward_price=self.get_underlying_price(),
                 strike=self.strike,
-                expiry_dcf=self.get_expiry_dcf(),
+                dcf=self.get_expiry_dcf(),
                 sigma=self.get_vol(vol_surface),
                 flag=self.flag)
     
     def get_gamma(self, vol_surface: VolSurfaceBase) -> float:
-        return option_analytics.get_gamma(
+        return black_scholes.get_gamma(
                 forward_price=self.get_underlying_price(),
                 strike=self.strike,
-                expiry_dcf=self.get_expiry_dcf(),
+                dcf=self.get_expiry_dcf(),
                 sigma=self.get_vol(vol_surface))
 
 @dataclass

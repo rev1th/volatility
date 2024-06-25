@@ -1,4 +1,3 @@
-
 from pydantic.dataclasses import dataclass
 from dataclasses import InitVar
 from scipy import interpolate
