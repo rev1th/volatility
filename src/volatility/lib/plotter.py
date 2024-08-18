@@ -8,7 +8,7 @@ def get_vol_surface_figure(calc_points: list[tuple[dtm.date, float, float]],
     vol_surface_df = pd.DataFrame(calc_points, columns=col_names)
     extra_df = pd.DataFrame(node_points, columns=col_names)
     return plotter.get_figure_3d(vol_surface_df, extra_df, title='Volatility Surface',
-                                 data_name='Surface', data2_name='Implied')
+                                 data_name='Model Fitted', data2_name='Market Implied')
 
 def display_vol_surface(calc_points: list[tuple[dtm.date, float, float]],
                         node_points: list[tuple[dtm.date, float, float]]) -> None:

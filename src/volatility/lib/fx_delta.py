@@ -2,7 +2,7 @@ import numpy as np
 import scipy.stats as scst
 
 from common.numeric import solver
-from volatility.models.option_types import FXDeltaType, OptionMoneynessType, ATMStrikeType
+from volatility.models.delta_types import FXDeltaType, OptionMoneynessType, ATMStrikeType
 from volatility.lib import black_scholes
 
 def get_delta(forward_price: float, strike: float, dcf: float, sigma: float, flag: int = 1,

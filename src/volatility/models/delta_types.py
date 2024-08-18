@@ -1,15 +1,5 @@
 from enum import StrEnum
 
-
-class OptionType(StrEnum):
-    Call = 'C'
-    Put = 'P'
-
-class OptionStyle(StrEnum):
-    European = 'E'
-    American = 'A'
-    Bermudan = 'B'
-
 class OptionMoneynessType(StrEnum):
     Strike = 'Strike'
     Simple = 'Simple'

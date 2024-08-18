@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-class VolSurfaceType(StrEnum):
+class VolatilityModelType(StrEnum):
     Interp = 'Interpolated'
     LV = 'LocalVol'
     SABR = 'SABR'

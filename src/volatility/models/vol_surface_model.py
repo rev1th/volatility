@@ -1,14 +1,14 @@
 from pydantic.dataclasses import dataclass
 import datetime as dtm
 import logging
-from scipy import optimize
 import numpy as np
 
 from common.base_class import NameDateClass
-from .option import CallOption, PutOption
-from .option_types import OptionMoneynessType
-from .vol_types import VolSurfaceType
+from common.numeric import solver
+from .delta_types import OptionMoneynessType
+from .vol_types import VolatilityModelType
 from .vol_surface import VolSurfaceBase, VolSurfaceInterpolation, LocalVol, SABR
+from volatility.instruments.option import CallOption, PutOption
 from volatility.lib import sabr
 
 logger = logging.Logger(__name__)
@@ -31,12 +31,11 @@ class VolSurfaceModel(NameDateClass):
     def build_SABR(self, beta: float, *args):
         init_guess = self.get_SABR_init(beta)
         bounds = [VOLVOL_BOUNDS, ALPHA_BOUNDS, RHO_BOUNDS]
-        res = optimize.minimize(self.get_SABR_solver, x0=init_guess, args=(beta, *args),
-                                method='L-BFGS-B', bounds=bounds)
-        volvol, alpha, rho = res.x
+        res = solver.find_fit(self.get_SABR_solver, init_guess=init_guess, args=(beta, *args), bounds=bounds)
+        volvol, alpha, rho = res
         return SABR(self.date, volvol=volvol, alpha=alpha, beta=beta, rho=rho)
     
-    def build(self, _: VolSurfaceType = None) -> VolSurfaceBase:
+    def build(self, _: VolatilityModelType = None) -> VolSurfaceBase:
         return self.build_SABR()
 
 @dataclass
@@ -49,12 +48,12 @@ class VolSurfaceModelListed(VolSurfaceModel):
         m_type = OptionMoneynessType.Normal
         for (expiry, _), (call_option, put_option) in self._option_chain.items():
             call_vol, put_vol = None, None
-            if call_option.is_valid():
-                call_vol = call_option.get_implied_vol(rate=self._rate)
-                res.append([expiry, call_option.get_moneyness(m_type), call_vol])
-            if put_option.is_valid():
-                put_vol = put_option.get_implied_vol(rate=self._rate)
-                res.append([expiry, put_option.get_moneyness(m_type), put_vol])
+            if call_option.is_valid_price(self.date):
+                call_vol = call_option.get_implied_vol(self.date, rate=self._rate)
+                res.append([expiry, call_option.get_moneyness(self.date, m_type), call_vol])
+            if put_option.is_valid_price(self.date):
+                put_vol = put_option.get_implied_vol(self.date, rate=self._rate)
+                res.append([expiry, put_option.get_moneyness(self.date, m_type), put_vol])
             # strike_vol = None
             # if call_vol:
             #     if put_vol:
@@ -73,12 +72,12 @@ class VolSurfaceModelListed(VolSurfaceModel):
     
     def get_nearest_atm_option(self):
         atm_option = None
-        atm_price = next(iter(self._option_chain.values()))[0].get_underlying_price()
+        atm_price = next(iter(self._option_chain.values()))[0].get_underlying_price(self.date)
         for (_, strike), cp_options in self._option_chain.items():
             if not atm_option or abs(strike - atm_price) < abs(atm_option.strike - atm_price):
-                if cp_options[0].is_valid():
+                if cp_options[0].is_valid_price(self.date):
                     atm_option = cp_options[0]
-                elif cp_options[1].is_valid():
+                elif cp_options[1].is_valid_price(self.date):
                     atm_option = cp_options[1]
         if not atm_option:
             raise Exception(f'No valid option strikes near {atm_price}')
@@ -87,9 +86,9 @@ class VolSurfaceModelListed(VolSurfaceModel):
     def get_SABR_init(self, beta: float):
         volvol, rho = 0.3, 0
         atm_option = self.get_nearest_atm_option()
-        underlier_price = atm_option.get_underlying_price()
-        expiry_dcf = atm_option.get_expiry_dcf()
-        atm_vol = atm_option.get_implied_vol()
+        underlier_price = atm_option.get_underlying_price(self.date)
+        expiry_dcf = atm_option.get_expiry_dcf(self.date)
+        atm_vol = atm_option.get_implied_vol(self.date)
         alpha = sabr.get_alpha(
                     vol_atmf=atm_vol, forward_price=underlier_price, dcf=expiry_dcf,
                     volvol=volvol, beta=beta, rho=rho)
@@ -101,9 +100,9 @@ class VolSurfaceModelListed(VolSurfaceModel):
         expiry_map = {}
         for (expiry, strike), (call_option, put_option) in self._option_chain.items():
             if expiry not in expiry_map:
-                fwd_price = call_option.get_underlying_price()
+                fwd_price = call_option.get_underlying_price(self.date)
                 if fwd_price:
-                    expiry_map[expiry] = (fwd_price, call_option.underlying.get_expiry_dcf())
+                    expiry_map[expiry] = (fwd_price, call_option.get_expiry_dcf(self.date))
                 else:
                     expiry_map[expiry] = None
             if not expiry_map[expiry]:
@@ -111,21 +110,21 @@ class VolSurfaceModelListed(VolSurfaceModel):
             sabr_vol = sabr.get_vol(
                         forward_price=expiry_map[expiry][0], strike=strike, dcf=expiry_map[expiry][1],
                         alpha=alpha, volvol=volvol, beta=beta, rho=rho)
-            if call_option.is_valid():
-                price_err = call_option.get_price(sabr_vol) - call_option.price
+            if call_option.is_valid_price(self.date):
+                price_err = call_option.get_price_for_vol(self.date, sabr_vol) - call_option.data[self.date]
                 errors.append(price_err)
-            if put_option.is_valid():
-                price_err = put_option.get_price(sabr_vol) - put_option.price
+            if put_option.is_valid_price(self.date):
+                price_err = put_option.get_price_for_vol(self.date, sabr_vol) - put_option.data[self.date]
                 errors.append(price_err)
         return np.sqrt(np.mean(np.array(errors)**2))
     
-    def build(self, surface_type: VolSurfaceType = None, **kwargs) -> VolSurfaceBase:
+    def build(self, surface_type: VolatilityModelType = None, **kwargs) -> VolSurfaceBase:
         match surface_type:
-            case VolSurfaceType.LV | None:
+            case VolatilityModelType.LV | None:
                 return self.build_LV()
-            case VolSurfaceType.SABR:
+            case VolatilityModelType.SABR:
                 return self.build_SABR(beta=kwargs.get('beta', 1))
-            case VolSurfaceType.Interp:
+            case VolatilityModelType.Interp:
                 return self.build_implied()
             case _:
                 raise Exception(f'{surface_type} not supported for listed strikes')
@@ -133,11 +132,11 @@ class VolSurfaceModelListed(VolSurfaceModel):
     def get_calibration_errors(self, vol_surface: VolSurfaceBase):
         res = []
         for (expiry, strike), (call_opt, put_opt) in self._option_chain.items():
-            if call_opt.is_valid():
-                call_error = call_opt.get_price(vol_surface, rate=self._rate) - call_opt.price
+            if call_opt.is_valid_price(self.date):
+                call_error = call_opt.get_price(vol_surface, rate=self._rate) - call_opt.data[self.date]
                 res.append([expiry, strike, 'C', call_error])
-            if put_opt.is_valid():
-                put_error = put_opt.get_price(vol_surface, rate=self._rate) - put_opt.price
+            if put_opt.is_valid_price(self.date):
+                put_error = put_opt.get_price(vol_surface, rate=self._rate) - put_opt.data[self.date]
                 res.append([expiry, strike, 'P', put_error])
         return res
     
@@ -147,9 +146,9 @@ class VolSurfaceModelListed(VolSurfaceModel):
         implied_points = []
         for (expiry, strike), (call_option, put_option) in self._option_chain.items():
             if expiry not in expiry_map:
-                fwd_price = call_option.get_underlying_price()
+                fwd_price = call_option.get_underlying_price(self.date)
                 if fwd_price:
-                    dcf = call_option.underlying.get_expiry_dcf()
+                    dcf = call_option.get_expiry_dcf(self.date)
                     vol_atm = vol_surface.get_strike_vol(dcf, fwd_price, fwd_price)
                     surface_points.append((expiry, fwd_price, vol_atm))
                     expiry_map[expiry] = (dcf, fwd_price)
@@ -159,8 +158,8 @@ class VolSurfaceModelListed(VolSurfaceModel):
                 continue
             vol_k = vol_surface.get_strike_vol(expiry_map[expiry][0], strike, expiry_map[expiry][1])
             surface_points.append((expiry, strike, vol_k))
-            if call_option.is_valid():
-                implied_points.append((expiry, strike, call_option.get_implied_vol()))
-            if put_option.is_valid():
-                implied_points.append((expiry, strike, put_option.get_implied_vol()))
+            if call_option.is_valid_price(self.date):
+                implied_points.append((expiry, strike, call_option.get_implied_vol(self.date)))
+            if put_option.is_valid_price(self.date):
+                implied_points.append((expiry, strike, put_option.get_implied_vol(self.date)))
         return surface_points, implied_points

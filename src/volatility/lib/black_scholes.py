@@ -3,7 +3,7 @@ import scipy.stats as scst
 
 from py_lets_be_rational import implied_volatility_from_a_transformed_rational_guess
 
-from volatility.models.option_types import OptionMoneynessType
+from volatility.models.delta_types import OptionMoneynessType
 
 # Standard log normal Black volatiity
 # https://github.com/vollib/lets_be_rational

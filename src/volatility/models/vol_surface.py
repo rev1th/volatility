@@ -1,31 +1,14 @@
 from pydantic.dataclasses import dataclass
-from dataclasses import field
 from typing import ClassVar
 import datetime as dtm
 import numpy as np
 import bisect
 
-from common.base_class import NameDateClass
-from common.chrono.daycount import DayCount
-
-from volatility.models.option_types import OptionMoneynessType
+from volatility.instruments.vol_surface import VolSurfaceBase
+from volatility.models.delta_types import OptionMoneynessType
 from volatility.lib.interpolator import Interpolator3D
 from volatility.lib import black_scholes, sabr
 
-
-# Abstract class
-@dataclass
-class VolSurfaceBase(NameDateClass):
-    _daycount_type: DayCount = field(kw_only=True, default=DayCount.ACT365)
-
-    def get_dcf(self, date: dtm.date) -> float:
-        return self._daycount_type.get_dcf(self.date, date)
-    
-    def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
-        '''Get volatility for tenor, strike and forward price'''
-    
-    def get_date_strike_vol(self, date: dtm.date, strike: float, forward_price: float) -> float:
-        return self.get_strike_vol(self.get_dcf(date), strike, forward_price)
 
 @dataclass
 class VolSurfaceInterpolation(VolSurfaceBase):
@@ -39,17 +22,10 @@ class VolSurfaceInterpolation(VolSurfaceBase):
     def __post_init__(self):
         self.set_interpolator()
     
-    # interpolation of (tenor dcf, moneyness) vs variance
+    # interpolation of (tenor dcf, moneyness) -> variance
     def set_interpolator(self) -> None:
         nodes = [(self.get_dcf(ni[0]), ni[1], ni[2]**2) for ni in self._nodes]
         self._interpolator = self._interpolator_class(nodes)
-    
-    @property
-    def nodes(self):
-        return self._nodes
-    
-    def get_node_keys(self):
-        return dict.fromkeys([(ni[0], ni[1]) for ni in self._nodes]).keys()
     
     def get_vol(self, dcf: float, moneyness: float) -> float:
         return np.sqrt(self._interpolator.get_value(dcf, moneyness))
@@ -67,7 +43,7 @@ class VolSurfaceInterpolation(VolSurfaceBase):
 
 
 @dataclass
-class VolSlice:
+class VolStrikeSlice:
 
     def get_value(self, _: float):
         '''Get volatility for strike slice'''
@@ -77,7 +53,7 @@ class VolSlice:
 
 @dataclass
 class VolSurfaceSlices(VolSurfaceBase):
-    _slice_curve: list[tuple[float, VolSlice]]
+    _slice_curve: list[tuple[float, VolStrikeSlice]]
     
     def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
         s_i = bisect.bisect(self._slice_curve, dcf, key=lambda s: s[0])
@@ -156,4 +132,4 @@ class SABR(VolSurfaceBase):
 
     def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
         return sabr.get_vol(forward_price=forward_price, strike=strike, dcf=dcf,
-                                      alpha=self.alpha, volvol=self.volvol, beta=self.beta, rho=self.rho)
+                            alpha=self.alpha, volvol=self.volvol, beta=self.beta, rho=self.rho)
