@@ -9,7 +9,7 @@ class OptionMoneynessType(StrEnum):
 
 class ATMStrikeType(StrEnum):
     Forward = 'Forward'
-    DN = 'DeltaNeutral'
+    DeltaNeutral = 'DeltaNeutral'
 
 class FXDeltaType(StrEnum):
     Spot = 'Spot'

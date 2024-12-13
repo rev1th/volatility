@@ -1,11 +1,10 @@
 from enum import StrEnum
 
 class VolatilityModelType(StrEnum):
-    Interp = 'Interpolated'
+    PolyMoneyness = 'StickyMoneyness'
     LV = 'LocalVol'
     SABR = 'SABR'
-    QuadD = 'QuadraticDelta'
-    SplineM = 'SplineMoneyness'
+    PolyDelta = 'StickyDelta'
 
 class VolatilityQuoteType(StrEnum):
     ATM = 'ATM'

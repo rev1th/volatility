@@ -1,13 +1,16 @@
 import numpy as np
 
+NUM_EPS = 1e-4
+RHO_BOUNDS = (-1+NUM_EPS, 1-NUM_EPS)
+ALPHA_BOUNDS = VOLVOL_BOUNDS = (NUM_EPS, None)
+
 # https://en.wikipedia.org/wiki/SABR_volatility_model
 # 0 <= beta <= 1
 # -1 <= rho <= 1
 # volvol > 0
-NUM_EPS = 1e-4
-def get_vol(forward_price: float, strike: float, dcf: float,
-                alpha: float, beta: float, rho: float, volvol: float,
-                shift: float = 0) -> float:
+def get_vol(forward_price: float, strike: float, tau: float,
+            alpha: float, beta: float, rho: float, volvol: float,
+            shift: float = 0) -> float:
     lfk = np.log((forward_price + shift) / (strike + shift))
     fmid = np.sqrt((forward_price + shift) * (strike + shift))
     fmid_b = fmid ** (1 - beta)
@@ -32,14 +35,14 @@ def get_vol(forward_price: float, strike: float, dcf: float,
     c = (2 - 3 * rho**2) * volvol**2 / 24
     g = (1-beta) * lfk
 
-    return x * (1 + (a + b + c) * dcf) / (1 + g**2 / 24)  # + g**4 / 1920
+    return x * (1 + (a + b + c) * tau) / (1 + g**2 / 24)  # + g**4 / 1920
 
 # https://github.com/ynouri/pysabr/blob/master/pysabr/models/hagan_2002_lognormal_sabr.py#L86
-def get_alpha(vol_atmf: float, forward_price: float, dcf: float, volvol: float, beta: float, rho: float) -> float:
+def get_alpha(vol_atmf: float, forward_price: float, tau: float, volvol: float, beta: float, rho: float) -> float:
     f_b = forward_price ** (1-beta)
-    a = (1-beta)**2 * dcf / (f_b**3 * 24)
-    b = rho * volvol * beta * dcf / (f_b**2 * 4)
-    c = (1 + (2 - 3 * rho**2) * volvol**2 * dcf / 24) / f_b
+    a = (1-beta)**2 * tau / (f_b**3 * 24)
+    b = rho * volvol * beta * tau / (f_b**2 * 4)
+    c = (1 + (2 - 3 * rho**2) * volvol**2 * tau / 24) / f_b
     coeff = [a, b, c, -vol_atmf]
     roots = np.roots(coeff)
     roots_real = np.extract(np.isreal(roots), np.real(roots))

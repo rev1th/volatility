@@ -10,10 +10,6 @@ class Interpolator3D:
     def __post_init__(self, xyz_init):
         self._xs, self._ys, self._zs = list(map(list, zip(*xyz_init)))
     
-    @property
-    def size(self):
-        return len(self._xs)
-    
     @classmethod
     def default(cls):
         return Spline3D

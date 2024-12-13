@@ -1,19 +1,20 @@
 from pydantic.dataclasses import dataclass
 from typing import ClassVar
-import datetime as dtm
 import numpy as np
 import bisect
+import logging
 
-from volatility.instruments.vol_surface import VolSurfaceBase
+from volatility.instruments.vol_surface_base import VolSurfaceBase
 from volatility.models.delta_types import OptionMoneynessType
 from volatility.lib.interpolator import Interpolator3D
-from volatility.lib import black_scholes, sabr
+from volatility.lib import black_scholes
 
+logger = logging.Logger(__name__)
 
 @dataclass
 class VolSurfaceInterpolation(VolSurfaceBase):
-    # (expiry, moneyness, volatility)
-    _nodes: list[tuple[dtm.date, float, float]]
+    # (tau, moneyness, volatility)
+    _slices: dict[float, list[tuple[float, float, float]]]
     _moneyness_type: OptionMoneynessType
     _interpolator_class = Interpolator3D.default()
 
@@ -24,112 +25,67 @@ class VolSurfaceInterpolation(VolSurfaceBase):
     
     # interpolation of (tenor dcf, moneyness) -> variance
     def set_interpolator(self) -> None:
-        nodes = [(self.get_dcf(ni[0]), ni[1], ni[2]**2) for ni in self._nodes]
-        self._interpolator = self._interpolator_class(nodes)
+        surface_nodes = [(tau, ni[0], ni[1]**2 * tau) for tau, nodes in self._slices.items() for ni in nodes]
+        self._interpolator = self._interpolator_class(surface_nodes)
     
-    def get_vol(self, dcf: float, moneyness: float) -> float:
-        return np.sqrt(self._interpolator.get_value(dcf, moneyness))
+    def get_vol(self, tau: float, moneyness: float) -> float:
+        return np.sqrt(self._interpolator.get_value(tau, moneyness) / tau)
     
-    def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
-        moneyness = black_scholes.get_moneyness(strike=strike, forward_price=forward_price, dcf=dcf,
+    def get_strike_vol(self, tau: float, strike: float, forward_price: float) -> float:
+        moneyness = black_scholes.get_moneyness(strike=strike, forward_price=forward_price, tau=tau,
                                                 moneyness_type=self._moneyness_type)
-        return self.get_vol(dcf, moneyness)
-    
-    def get_error(self) -> float:
-        errors = []
-        for (dcf, moneyness, vol) in self._nodes:
-            errors.append(self.get_vol(dcf, moneyness) - vol)
-        return np.sqrt(np.mean(np.array(errors)**2))
+        return self.get_vol(tau, moneyness)
 
 
 @dataclass
 class VolStrikeSlice:
-
-    def get_value(self, _: float):
-        '''Get volatility for strike slice'''
+    _tau: float
     
-    def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
+    def get_strike_vol(self, tau: float, strike: float, forward_price: float) -> float:
         '''Get volatility for tenor, strike and forward price'''
 
 @dataclass
 class VolSurfaceSlices(VolSurfaceBase):
-    _slice_curve: list[tuple[float, VolStrikeSlice]]
+    _slice_curve: list[VolStrikeSlice]
     
-    def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
-        s_i = bisect.bisect(self._slice_curve, dcf, key=lambda s: s[0])
-        t_i0, crv_i0 = self._slice_curve[s_i-1]
-        vol_i0 = crv_i0.get_strike_vol(dcf=dcf, strike=strike, forward_price=forward_price)
-        if s_i >= len(self._slice_curve):
-            return vol_i0
-        t_i1, crv_i1 = self._slice_curve[s_i]
-        vol_i1 = crv_i1.get_strike_vol(dcf=dcf, strike=strike, forward_price=forward_price)
-        t = (dcf - t_i0) / (t_i1 - t_i0)
-        return np.sqrt(vol_i0**2 * (1-t) + vol_i1**2 * t)
-
-
-# https://medium.com/@add.mailme/implied-local-and-heston-volatility-and-its-calibration-in-python-1b3b05372af3
-STRIKE_BUMP = 1e-3
-TENOR_BUMP = 1e-2
-@dataclass
-class LocalVol(VolSurfaceInterpolation):
-    _rate: float = 0
+    def get_strike_var(self, tau: float, strike: float, forward_price: float) -> float:
+        s_i = bisect.bisect(self._slice_curve, tau, key=lambda sc: sc._tau)
+        crv_i0 = self._slice_curve[s_i-1]
+        tau_i0 = crv_i0._tau
+        vol_i0 = crv_i0.get_strike_vol(tau=tau_i0, strike=strike, forward_price=forward_price)
+        if s_i >= len(self._slice_curve) or tau <= tau_i0:
+            return vol_i0**2 * tau
+        crv_i1 = self._slice_curve[s_i]
+        tau_i1 = crv_i1._tau
+        vol_i1 = crv_i1.get_strike_vol(tau=tau_i1, strike=strike, forward_price=forward_price)
+        weight = (tau - tau_i0) / (tau_i1 - tau_i0)
+        # Monotonic variance for no-arbitrage
+        return vol_i0**2 * tau_i0 * (1-weight) + vol_i1**2 * tau_i1 * weight
     
-    def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
-        d_strike = strike * STRIKE_BUMP
-        strike_p1 = strike + d_strike
-        strike_m1 = strike - d_strike
-        price_k_p1 = black_scholes.get_price(
-                        forward_price=forward_price,
-                        strike=strike_p1,
-                        expiry_dcf=dcf,
-                        sigma=super().get_strike_vol(dcf, strike_p1, forward_price),
-                        rate=self._rate,
-                    )
-        price_k = black_scholes.get_price(
-                        forward_price=forward_price,
-                        strike=strike,
-                        expiry_dcf=dcf,
-                        sigma=super().get_strike_vol(dcf, strike, forward_price),
-                        rate=self._rate,
-                    )
-        price_k_m1 = black_scholes.get_price(
-                        forward_price=forward_price,
-                        strike=strike_m1,
-                        expiry_dcf=dcf,
-                        sigma=super().get_strike_vol(dcf, strike_m1, forward_price),
-                        rate=self._rate,
-                    )
-        opt_dkk = (price_k_p1 + price_k_m1 - 2 * price_k) / (d_strike ** 2)
-        if opt_dkk <= 0:
-            return None
+    def get_strike_vol(self, tau: float, strike: float, forward_price: float) -> float:
+        return np.sqrt(self.get_strike_var(tau, strike, forward_price) / tau)
 
-        d_dcf = dcf * TENOR_BUMP
-        dcf_p1 = dcf + d_dcf
-        dcf_m1 = dcf - d_dcf
-        price_t_p1 = black_scholes.get_price(
-                        forward_price=forward_price,
-                        strike=strike,
-                        expiry_dcf=dcf_p1,
-                        sigma=super().get_strike_vol(dcf_p1, strike, forward_price),
-                        rate=self._rate)
-        price_t_m1 = black_scholes.get_price(
-                        forward_price=forward_price,
-                        strike=strike,
-                        expiry_dcf=dcf_m1,
-                        sigma=super().get_strike_vol(dcf_m1, strike, forward_price),
-                        rate=self._rate)
-        opt_dt = (price_t_p1 - price_t_m1) / (d_dcf * 2)
-        
-        vol = np.sqrt((opt_dt + self._rate * price_k) / (0.5 * strike**2 * opt_dkk))
-        return vol
-
+ROOT_EPS = 1e-6
 @dataclass
-class SABR(VolSurfaceBase):
-    alpha: float
-    beta: float
-    rho: float
-    volvol: float
+class PolynomialMoneynessCurve(VolStrikeSlice):
+    _xyw: list[tuple[float, float, float]]
+    _moneyness_type: OptionMoneynessType
+    _degree: int = 3
 
-    def get_strike_vol(self, dcf: float, strike: float, forward_price: float) -> float:
-        return sabr.get_vol(forward_price=forward_price, strike=strike, dcf=dcf,
-                            alpha=self.alpha, volvol=self.volvol, beta=self.beta, rho=self.rho)
+    def __post_init__(self):
+        xs, ys, ws = zip(*self._xyw)
+        assert(len(xs) > self._degree, f'Polynomial fit requires more than {self._degree} coordinates')
+        self._polynomial = np.polynomial.Polynomial.fit(xs, ys, w=ws, deg=self._degree)
+    
+    def get_strike_vol(self, tau: float, strike: float, forward_price: float) -> float:
+        if self._moneyness_type == OptionMoneynessType.Standard:
+            moneyness, m_iter = 0, None
+            while(not m_iter or abs(moneyness - m_iter) > ROOT_EPS):
+                sigma = self._polynomial(moneyness)
+                m_iter = moneyness
+                moneyness = black_scholes.get_moneyness(strike=strike, forward_price=forward_price,
+                                tau=tau, sigma=sigma, moneyness_type=OptionMoneynessType.Standard)
+            return sigma
+        moneyness = black_scholes.get_moneyness(strike=strike, forward_price=forward_price,
+                        tau=tau, moneyness_type=self._moneyness_type)
+        return self._polynomial(moneyness)
