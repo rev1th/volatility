@@ -3,7 +3,7 @@ import scipy.stats as scst
 
 from py_lets_be_rational import implied_volatility_from_a_transformed_rational_guess
 
-from volatility.models.delta_types import OptionMoneynessType
+from volatility.models.construct_types import NumeraireConvention, OptionMoneynessType
 
 # Standard log normal Black volatility
 # https://github.com/vollib/lets_be_rational
@@ -27,53 +27,76 @@ def get_d12_m(lfk: float, tau: float, sigma: float) -> tuple[float, float]:
     return d1, d2
 
 # https://docs.scipy.org/doc/scipy/reference/generated/scipy.stats.norm.html
-def get_premium(forward_price: float, strike: float, tau: float, sigma: float,
-                flag: int = 1, discount_factor: float = 1) -> float:
+def get_premium(forward_price: float, strike: float, tau: float, sigma: float, flag: int = 1, 
+                discount_factor: float = 1, numeraire = NumeraireConvention.Regular) -> float:
     d1, d2 = get_d12(forward_price=forward_price, strike=strike, tau=tau, sigma=sigma)
-    return flag * (forward_price * scst.norm.cdf(flag * d1, loc=0, scale=1) - 
+    premium = flag * (forward_price * scst.norm.cdf(flag * d1, loc=0, scale=1) - 
                    strike * scst.norm.cdf(flag * d2, loc=0, scale=1)) * discount_factor
+    match numeraire:
+        case NumeraireConvention.Regular:
+            return premium
+        case NumeraireConvention.Inverse:
+            return premium / forward_price
 
 def get_delta(forward_price: float, strike: float, tau: float, sigma: float,
               flag: int = 1, discount_factor: float = 1) -> float:
     d1, _ = get_d12(forward_price, strike, tau, sigma)
     return flag * discount_factor * scst.norm.cdf(flag * d1)
 
-def get_gamma(forward_price: float, strike: float, tau: float, sigma: float, discount_factor: float = 1) -> float:
+def get_vega(forward_price: float, strike: float, tau: float, sigma: float, 
+             discount_factor: float = 1, numeraire = NumeraireConvention.Regular) -> float:
     d1, _ = get_d12(forward_price, strike, tau, sigma)
-    return discount_factor * scst.norm.pdf(d1) / (forward_price * sigma * np.sqrt(tau))
+    vega = discount_factor * forward_price * scst.norm.pdf(d1) * np.sqrt(tau) * 1e-2
+    match numeraire:
+        case NumeraireConvention.Regular:
+            return vega
+        case NumeraireConvention.Inverse:
+            return vega / forward_price
 
-def get_vega(forward_price: float, strike: float, tau: float, sigma: float, discount_factor: float = 1) -> float:
-    d1, _ = get_d12(forward_price, strike, tau, sigma)
-    return discount_factor * forward_price * scst.norm.pdf(d1) * np.sqrt(tau) * 1e-2
-
-def get_theta(forward_price: float, strike: float, tau: float, sigma: float,
-              flag: int = 1, discount_factor: float = 1) -> float:
+def get_theta(forward_price: float, strike: float, tau: float, sigma: float, flag: int = 1, 
+              discount_factor: float = 1, tau_unit: float = 1/252, 
+              numeraire = NumeraireConvention.Regular) -> float:
     d1, d2 = get_d12(forward_price, strike, tau, sigma)
     fwd_premium = flag * (forward_price * scst.norm.cdf(flag * d1) - strike * scst.norm.cdf(flag * d2))
     rate = -np.log(discount_factor) / tau
-    return (-forward_price * scst.norm.pdf(d1) * sigma / (2 * np.sqrt(tau)) - rate * fwd_premium) * discount_factor
+    theta = discount_factor * (-forward_price * scst.norm.pdf(d1) * sigma / (2 * np.sqrt(tau)) + 
+                               rate * fwd_premium) * tau_unit
+    match numeraire:
+        case NumeraireConvention.Regular:
+            return theta
+        case NumeraireConvention.Inverse:
+            return theta / forward_price
+
+def get_gamma(forward_price: float, strike: float, tau: float, sigma: float, discount_factor: float = 1) -> float:
+    d1, _ = get_d12(forward_price, strike, tau, sigma)
+    return discount_factor * scst.norm.pdf(d1) / (forward_price * sigma * np.sqrt(tau))
 
 def get_vanna(forward_price: float, strike: float, tau: float, sigma: float, discount_factor: float = 1) -> float:
     d1, d2 = get_d12(forward_price, strike, tau, sigma)
     return -discount_factor * scst.norm.pdf(d1) * d2 / sigma * 1e-2
 
-def get_volga(forward_price: float, strike: float, tau: float, sigma: float, discount_factor: float = 1) -> float:
+def get_volga(forward_price: float, strike: float, tau: float, sigma: float, 
+              discount_factor: float = 1, numeraire = NumeraireConvention.Regular) -> float:
     d1, d2 = get_d12(forward_price, strike, tau, sigma)
-    return discount_factor * forward_price * scst.norm.pdf(d1) * np.sqrt(tau) * d1 * d2 / sigma * 1e-4
+    volga = discount_factor * forward_price * scst.norm.pdf(d1) * np.sqrt(tau) * d1 * d2 / sigma * 1e-4
+    match numeraire:
+        case NumeraireConvention.Regular:
+            return volga
+        case NumeraireConvention.Inverse:
+            return volga / forward_price
 
 def get_pdf(forward_price: float, strike: float, tau: float, sigma: float) -> float:
     d1, _ = get_d12(forward_price, strike, tau, sigma)
     return scst.norm.pdf(d1) / (strike * sigma * np.sqrt(tau))
 
-def get_strike_for_delta(delta: float, forward_price: float, tau: float, sigma: float) -> float:
-    return forward_price * get_moneyness_for_delta(delta=delta, tau=tau, sigma=sigma,
-                                                    moneyness_type=OptionMoneynessType.Simple)
-
-def get_moneyness_for_delta(delta: float, tau: float, sigma: float,
-                            moneyness_type = OptionMoneynessType.Normal) -> float:
+def get_moneyness_for_delta(
+        delta: float, tau: float, sigma: float, forward_price: float = None,
+        moneyness_type = OptionMoneynessType.LogSimple) -> float:
     inv_n = scst.norm.ppf(abs(delta)) * (-1 if delta < 0 else 1)
     sigma_t = sigma * np.sqrt(tau)
     match moneyness_type:
+        case OptionMoneynessType.Strike:
+            return forward_price * np.exp(sigma_t * (sigma_t / 2 - inv_n))
         case OptionMoneynessType.Simple:
             return np.exp(sigma_t * (sigma_t / 2 - inv_n))
         case OptionMoneynessType.LogSimple:
@@ -83,9 +106,13 @@ def get_moneyness_for_delta(delta: float, tau: float, sigma: float,
         case OptionMoneynessType.Standard:
             return sigma_t / 2 - inv_n
 
+def get_strike_for_delta(delta: float, forward_price: float, tau: float, sigma: float) -> float:
+    return get_moneyness_for_delta(delta=delta, tau=tau, sigma=sigma, forward_price=forward_price,
+            moneyness_type=OptionMoneynessType.Strike)
+
 def get_moneyness(
         forward_price: float, strike: float, tau: float = None,
-        sigma: float = None, moneyness_type = OptionMoneynessType.Normal) -> float:
+        sigma: float = None, moneyness_type = OptionMoneynessType.LogSimple) -> float:
     match moneyness_type:
         case OptionMoneynessType.Simple:
             return strike / forward_price
@@ -98,7 +125,7 @@ def get_moneyness(
 
 def get_strike_for_moneyness(
         moneyness: float, forward_price: float, tau: float = None,
-        sigma: float = None, moneyness_type = OptionMoneynessType.Normal) -> float:
+        sigma: float = None, moneyness_type = OptionMoneynessType.LogSimple) -> float:
     match moneyness_type:
         case OptionMoneynessType.Simple:
             return forward_price * moneyness

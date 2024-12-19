@@ -3,12 +3,15 @@ import datetime as dtm
 import numpy as np
 
 from common.numeric import solver
-from .delta_types import FXDeltaType, ATMStrikeType, OptionMoneynessType
+from common.models.base_instrument import BaseInstrument
+from .construct_types import NumeraireConvention, ATMStrikeType, OptionMoneynessType
 from .vol_surface_construct import VolSurfaceConstruct
 from .vol_surface import VolSurfaceSlices, VolStrikeSlice, PolynomialMoneynessCurve, ROOT_EPS
 from .vol_surface_sabr import SABRSurface
 from .vol_types import VolatilityQuoteType, VolatilityModelType
-from volatility.lib import fx_delta, sabr
+from volatility.instruments.fx_option import FXCallOption, FXPutOption
+from volatility.instruments.option_types import OptionGreekType
+from volatility.lib import fx_convention, sabr
 
 
 @dataclass
@@ -42,7 +45,7 @@ class FXSliceImplied:
 @dataclass
 class FXDeltaCurve(VolStrikeSlice):
     _quotes: list[FXQuoteImplied]
-    _delta_type: FXDeltaType
+    _numeraire: NumeraireConvention
 
     def __post_init__(self):
         xs, ys, ws = zip(*[(q.moneyness, q.value, q.weight) for q in self._quotes])
@@ -51,19 +54,19 @@ class FXDeltaCurve(VolStrikeSlice):
     
     def get_strike_vol(self, tau: float, strike: float, forward_price: float):
         delta, d_iter = 0.5, None
-        delta_type, polynomial = self._delta_type, self._polynomial
+        numeraire, polynomial = self._numeraire, self._polynomial
         while(not d_iter or abs(delta - d_iter) > ROOT_EPS):
             sigma = polynomial(delta)
             d_iter = delta
-            delta = fx_delta.get_delta(forward_price=forward_price,
-                strike=strike, tau=tau, sigma=sigma, delta_type=delta_type)
+            delta = fx_convention.get_delta(forward_price=forward_price,
+                strike=strike, tau=tau, sigma=sigma, numeraire=numeraire)
         return sigma
 
 
 @dataclass
 class FXVolSurfaceConstruct(VolSurfaceConstruct):
     _slices: list[FXDeltaSlice]
-    _delta_type: FXDeltaType
+    _numeraire: NumeraireConvention
     _atm_type = ATMStrikeType.DeltaNeutral
 
     def get_dcf(self, date: dtm.date) -> float:
@@ -71,7 +74,7 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
     
     def get_implied(self, moneyness_type: OptionMoneynessType = None) -> list[FXSliceImplied]:
         slices_implied = []
-        delta_type = self._delta_type
+        numeraire = self._numeraire
         for slice in self._slices:
             expiry, fwd_price = slice.expiry, slice.forward_price
             dcf = self.get_dcf(expiry)
@@ -89,28 +92,28 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
                         bf_vols[quote.delta] = quote.value
                         bf_ws[quote.delta] = quote.weight
             if moneyness_type:
-                x_atm = fx_delta.get_moneyness_atm(atm_type=self._atm_type, tau=dcf, sigma=atm_vol,
-                            forward_price=fwd_price, delta_type=delta_type, moneyness_type=moneyness_type)
+                x_atm = fx_convention.get_moneyness_atm(atm_type=self._atm_type, tau=dcf, sigma=atm_vol,
+                            forward_price=fwd_price, numeraire=numeraire, moneyness_type=moneyness_type)
             else:
-                x_atm = fx_delta.get_delta_atm(atm_type=self._atm_type, tau=dcf, sigma=atm_vol,
-                            delta_type=delta_type)
+                x_atm = fx_convention.get_delta_atm(atm_type=self._atm_type, tau=dcf, sigma=atm_vol,
+                            numeraire=numeraire)
             moneyness_vols.append(FXQuoteImplied(x_atm, atm_vol, atm_weight))
             for delta in bf_vols:
                 d_weight = 1 / (1 / atm_weight + 1 / bf_ws[delta] + 1 / (2*rr_ws[delta]))
                 put_vol = atm_vol + bf_vols[delta] - rr_vols[delta] / 2
                 put_x = -delta
                 if moneyness_type:
-                    put_x = fx_delta.get_moneyness_for_delta(put_x, tau=dcf, sigma=put_vol,
-                                forward_price=fwd_price, delta_type=delta_type, moneyness_type=moneyness_type)
+                    put_x = fx_convention.get_moneyness_for_delta(put_x, tau=dcf, sigma=put_vol,
+                                forward_price=fwd_price, numeraire=numeraire, moneyness_type=moneyness_type)
                 else:
-                    put_x = fx_delta.get_delta_complement(put_x, tau=dcf, sigma=put_vol,
-                                delta_type=delta_type)
+                    put_x = fx_convention.get_delta_complement(put_x, tau=dcf, sigma=put_vol,
+                                numeraire=numeraire)
                 moneyness_vols.append(FXQuoteImplied(put_x, put_vol, d_weight))
                 call_vol = atm_vol + bf_vols[delta] + rr_vols[delta] / 2
                 call_x = delta
                 if moneyness_type:
-                    call_x = fx_delta.get_moneyness_for_delta(call_x, tau=dcf, sigma=call_vol,
-                                forward_price=fwd_price, delta_type=delta_type, moneyness_type=moneyness_type)
+                    call_x = fx_convention.get_moneyness_for_delta(call_x, tau=dcf, sigma=call_vol,
+                                forward_price=fwd_price, numeraire=numeraire, moneyness_type=moneyness_type)
                 moneyness_vols.append(FXQuoteImplied(call_x, call_vol, d_weight))
             slices_implied.append(FXSliceImplied(fwd_price, dcf, moneyness_vols, expiry))
         return slices_implied
@@ -129,7 +132,7 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
         slice_params = []
         for slice in implied_slices:
             dcf, quotes = slice.tau, slice.quotes
-            delta_curve = FXDeltaCurve(dcf, quotes, self._delta_type)
+            delta_curve = FXDeltaCurve(dcf, quotes, self._numeraire)
             slice_params.append(delta_curve)
         return VolSurfaceSlices(self.date, slice_params)
     
@@ -154,7 +157,7 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
                 error_weights.append(quote.weight)
         return np.sqrt(np.dot(error_weights, np.array(errors)**2) / np.sum(error_weights))
     
-    def build_SABR(self, beta: float):
+    def build_SABR(self, beta: float = 1):
         init_guess = self.get_SABR_init(beta)
         market_vols = self.get_implied(OptionMoneynessType.Strike)
         bounds = [sabr.ALPHA_BOUNDS, sabr.VOLVOL_BOUNDS, sabr.RHO_BOUNDS]
@@ -170,7 +173,7 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
             case VolatilityModelType.PolyDelta:
                 return self.build_PD()
             case VolatilityModelType.SABR:
-                return self.build_SABR(kwargs.get('beta', 1))
+                return self.build_SABR(**kwargs)
             case _:
                 raise Exception(f'{model_type} not supported for FX quotes')
     
@@ -181,8 +184,8 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
             for quote in slice.quotes:
                 delta = quote.moneyness
                 vol_quote = quote.value
-                strike = fx_delta.get_strike_for_delta(delta, forward_price=price, tau=dcf,
-                            sigma=vol_quote, delta_type=self._delta_type)
+                strike = fx_convention.get_strike_for_delta(delta, forward_price=price, tau=dcf,
+                            sigma=vol_quote, numeraire=self._numeraire)
                 vol_calc = vol_surface.get_strike_vol(dcf, strike=strike, forward_price=price)
                 surface_points.append((expiry, delta, vol_calc, vol_quote))
         return surface_points, ['Expiry', 'Delta', 'Model Fitted', 'Market Quotes']
@@ -194,8 +197,8 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
             for quote in slice.quotes:
                 delta = quote.moneyness
                 vol_quote = quote.value
-                strike = fx_delta.get_strike_for_delta(delta, forward_price=price, tau=dcf,
-                            sigma=vol_quote, delta_type=self._delta_type)
+                strike = fx_convention.get_strike_for_delta(delta, forward_price=price, tau=dcf,
+                            sigma=vol_quote, numeraire=self._numeraire)
                 vol_calc = vol_surface.get_strike_vol(dcf, strike=strike, forward_price=price)
                 res.append((expiry, delta, vol_quote, vol_calc-vol_quote))
         return res, ['Expiry', 'Delta', 'Quote', 'Error']
@@ -205,14 +208,17 @@ class FXVolSurfaceConstruct(VolSurfaceConstruct):
         greek_types = [gt for gt in OptionGreekType]
         for slice in self.get_implied():
             expiry, price, dcf = slice.expiry, slice.forward_price, slice.tau
+            underlier = BaseInstrument()
+            underlier.data[self.date] = price
             for quote in slice.quotes:
                 delta = quote.moneyness
                 vol_quote = quote.value
-                strike = fx_delta.get_strike_for_delta(delta, forward_price=price, tau=dcf,
-                            sigma=vol_quote, delta_type=self._delta_type)
-                call, put = CallOption(None, expiry, strike), PutOption(None, expiry, strike)
+                strike = fx_convention.get_strike_for_delta(delta, forward_price=price, tau=dcf,
+                            sigma=vol_quote, numeraire=self._numeraire)
+                call = FXCallOption(underlier, expiry, strike, expiry)
+                put = FXPutOption(underlier, expiry, strike, expiry)
                 call_greeks = call.get_greeks(vol_surface, greek_types)
-                surface_greeks.append((expiry, strike, *call_greeks))
+                surface_greeks.append((expiry, strike, *[call_greeks[gt] for gt in greek_types]))
                 put_greeks = put.get_greeks(vol_surface, greek_types)
-                surface_greeks.append((expiry, strike, *put_greeks))
+                surface_greeks.append((expiry, strike, *[put_greeks[gt] for gt in greek_types]))
         return surface_greeks, ['Tenor', 'Strike'] + [gt.name for gt in greek_types]

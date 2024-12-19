@@ -5,9 +5,9 @@ import bisect
 import logging
 
 from volatility.instruments.vol_surface_base import VolSurfaceBase
-from volatility.models.delta_types import OptionMoneynessType
 from volatility.lib.interpolator import Interpolator3D
-from volatility.lib import black_scholes
+from volatility.lib import black_model
+from .construct_types import OptionMoneynessType
 
 logger = logging.Logger(__name__)
 
@@ -32,7 +32,7 @@ class VolSurfaceInterpolation(VolSurfaceBase):
         return np.sqrt(self._interpolator.get_value(tau, moneyness) / tau)
     
     def get_strike_vol(self, tau: float, strike: float, forward_price: float) -> float:
-        moneyness = black_scholes.get_moneyness(strike=strike, forward_price=forward_price, tau=tau,
+        moneyness = black_model.get_moneyness(strike=strike, forward_price=forward_price, tau=tau,
                                                 moneyness_type=self._moneyness_type)
         return self.get_vol(tau, moneyness)
 
@@ -83,9 +83,9 @@ class PolynomialMoneynessCurve(VolStrikeSlice):
             while(not m_iter or abs(moneyness - m_iter) > ROOT_EPS):
                 sigma = self._polynomial(moneyness)
                 m_iter = moneyness
-                moneyness = black_scholes.get_moneyness(strike=strike, forward_price=forward_price,
+                moneyness = black_model.get_moneyness(strike=strike, forward_price=forward_price,
                                 tau=tau, sigma=sigma, moneyness_type=OptionMoneynessType.Standard)
             return sigma
-        moneyness = black_scholes.get_moneyness(strike=strike, forward_price=forward_price,
+        moneyness = black_model.get_moneyness(strike=strike, forward_price=forward_price,
                         tau=tau, moneyness_type=self._moneyness_type)
         return self._polynomial(moneyness)

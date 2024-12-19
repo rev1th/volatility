@@ -11,8 +11,6 @@ class ATMStrikeType(StrEnum):
     Forward = 'Forward'
     DeltaNeutral = 'DeltaNeutral'
 
-class FXDeltaType(StrEnum):
-    Spot = 'Spot'
-    Forward = 'Forward'
-    SpotPremium = 'SpotPremium'
-    ForwardPremium = 'ForwardPremium'
+class NumeraireConvention(StrEnum):
+    Regular = 'Regular'
+    Inverse = 'Inverse'

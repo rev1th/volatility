@@ -4,13 +4,13 @@ import numpy as np
 import logging
 
 from common.numeric import solver
-from volatility.instruments.option import CallOption, PutOption
+from volatility.instruments.listed_option import CallOption, PutOption
 from volatility.instruments.option_types import OptionGreekType
-from volatility.lib import black_scholes, sabr
-from .delta_types import OptionMoneynessType
+from volatility.lib import black_model, sabr
+from .construct_types import OptionMoneynessType
 from .vol_types import VolatilityModelType
 from .vol_surface import VolSurfaceBase, VolSurfaceSlices, PolynomialMoneynessCurve
-from .vol_surface_lv import LocalVol
+from .vol_surface_lv import LocalVolatility
 from .vol_surface_sabr import SABRSlice
 from .vol_surface_construct import VolSurfaceConstruct
 
@@ -59,24 +59,25 @@ class ListedOptionsConstruct(VolSurfaceConstruct):
         for strike_slice in self._option_matrix:
             df = strike_slice.discount_factor
             ref_option = strike_slice.lines[0].call
-            dcf, forward_price = ref_option.get_expiry_dcf(date), ref_option.get_forward_price(date)
+            tau, forward_price = ref_option.get_tau(date), ref_option.get_forward_price(date)
             nodes = []
             for strike_line in strike_slice.lines:
-                moneyness = black_scholes.get_moneyness(forward_price=forward_price,
-                    strike=strike_line.strike, tau=dcf, moneyness_type=moneyness_type)
+                moneyness = black_model.get_moneyness(forward_price=forward_price,
+                    strike=strike_line.strike, tau=tau, moneyness_type=moneyness_type)
                 if strike_line.c_weight > 0:
                     call_vol = strike_line.call.get_implied_volatility(date, discount_factor=df)
                     nodes.append((moneyness, call_vol, strike_line.c_weight))
                 if strike_line.p_weight > 0:
                     put_vol = strike_line.put.get_implied_volatility(date, discount_factor=df)
                     nodes.append((moneyness, put_vol, strike_line.p_weight))
-            slices[dcf] = nodes
+            slices[tau] = nodes
         return slices
     
     def build_LV(self):
         m_type = OptionMoneynessType.Normal
         slice_nodes = self.get_implied(m_type)
-        return LocalVol(self.date, slice_nodes, m_type, name=self.name)
+        df_map = {s1: s2.discount_factor for s1, s2 in zip(slice_nodes.keys(), self._option_matrix)}
+        return LocalVolatility(self.date, slice_nodes, m_type, df_map, name=self.name)
     
     def get_nearest_atm_option(self) -> CallOption:
         atm_option = None
@@ -96,56 +97,55 @@ class ListedOptionsConstruct(VolSurfaceConstruct):
         volvol, rho = 0.3, 0
         atm_option = self.get_nearest_atm_option()
         forward_price = atm_option.get_forward_price(self.date)
-        expiry_dcf = atm_option.get_expiry_dcf(self.date)
+        tau = atm_option.get_tau(self.date)
         atm_vol = atm_option.get_implied_volatility(self.date)
         alpha = sabr.get_alpha(
-                    vol_atmf=atm_vol, forward_price=forward_price, tau=expiry_dcf,
+                    vol_atmf=atm_vol, forward_price=forward_price, tau=tau,
                     volvol=volvol, beta=beta, rho=rho)
         return [alpha, volvol, rho]
     
-    def get_SABR_solver(self, params: tuple[float], beta: float, strike_slice: ModelStrikeSlice) -> float:
+    def get_SABR_solver(self, params: tuple[float], beta: float, tau: float, strike_slice: ModelStrikeSlice) -> float:
         alpha, volvol, rho = params
         errors = []
         ref_option = strike_slice.lines[0].call
         fwd_price = ref_option.get_forward_price(self.date)
-        expiry_dcf = ref_option.get_expiry_dcf(self.date)
         for strike_line in strike_slice.lines:
             sabr_vol = sabr.get_vol(
-                        forward_price=fwd_price, strike=strike_line.strike, tau=expiry_dcf,
+                        forward_price=fwd_price, strike=strike_line.strike, tau=tau,
                         alpha=alpha, volvol=volvol, beta=beta, rho=rho)
             if strike_line.c_weight > 0:
-                price_calc = strike_line.call.get_price_for_vol(self.date, sabr_vol,
+                price_calc = strike_line.call.get_price(sabr_vol, forward_price=fwd_price, tau=tau,
                                 discount_factor=strike_slice.discount_factor)
                 price_err = price_calc - strike_line.call.data[self.date]
                 errors.append(strike_line.c_weight * price_err)
             if strike_line.p_weight > 0:
-                price_calc = strike_line.put.get_price_for_vol(self.date, sabr_vol,
+                price_calc = strike_line.put.get_price(sabr_vol, forward_price=fwd_price, tau=tau,
                                 discount_factor=strike_slice.discount_factor)
                 price_err = price_calc - strike_line.put.data[self.date]
                 errors.append(strike_line.p_weight * price_err)
         return np.sqrt(np.sum(np.array(errors)**2))
     
-    def build_SABR(self, beta: float, *args):
+    def build_SABR(self, beta: float = 1):
         init_guess = self.get_SABR_init(beta)
         bounds = [sabr.ALPHA_BOUNDS, sabr.VOLVOL_BOUNDS, sabr.RHO_BOUNDS]
         slices = []
         for strike_slice in self._option_matrix:
-            expiry_dcf = strike_slice.lines[0].call.get_expiry_dcf(self.date)
+            tau = strike_slice.lines[0].call.get_tau(self.date)
             res = solver.find_fit(self.get_SABR_solver, init_guess=init_guess, bounds=bounds,
-                                  args=(beta, strike_slice, *args))
+                                  args=(beta, tau, strike_slice))
             alpha, volvol, rho = res
-            slices.append(SABRSlice(expiry_dcf, alpha=alpha, beta=beta, rho=rho, volvol=volvol))
+            slices.append(SABRSlice(tau, alpha=alpha, beta=beta, rho=rho, volvol=volvol))
         return VolSurfaceSlices(self.date, slices, name=self.name)
     
     def build_PM(self):
         m_type = OptionMoneynessType.LogSimple
         slice_curves = []
-        for dcf, nodes in self.get_implied(m_type).items():
+        for tau, nodes in self.get_implied(m_type).items():
             if len(nodes) > 3:
                 try:
-                    slice_curves.append(PolynomialMoneynessCurve(dcf, nodes, m_type))
+                    slice_curves.append(PolynomialMoneynessCurve(tau, nodes, m_type))
                 except Exception as ex:
-                    logger.error(f'Slice {dcf} for {self.name} failed: {ex}')
+                    logger.error(f'Slice {tau} for {self.name} failed: {ex}')
         if slice_curves:
             return VolSurfaceSlices(self.date, slice_curves, name=self.name)
         logger.critical(f'No valid slices to build Surface {self.name}')
@@ -157,7 +157,7 @@ class ListedOptionsConstruct(VolSurfaceConstruct):
             case VolatilityModelType.LV:
                 return self.build_LV()
             case VolatilityModelType.SABR:
-                return self.build_SABR(beta=kwargs.get('beta', 1))
+                return self.build_SABR(**kwargs)
             case _:
                 raise Exception(f'{model_type} not supported for listed options')
     
@@ -168,11 +168,11 @@ class ListedOptionsConstruct(VolSurfaceConstruct):
             for strike_line in strike_slice.lines:
                 if strike_line.call.is_valid_price(self.date):
                     price = strike_line.call.data[self.date]
-                    price_calc = strike_line.call.get_price(vol_surface, discount_factor=df)
+                    price_calc = strike_line.call.get_price_from_surface(vol_surface, discount_factor=df)
                     res.append((expiry, strike_line.strike, 'Call', price, price_calc-price))
                 if strike_line.put.is_valid_price(self.date):
                     price = strike_line.put.data[self.date]
-                    price_calc = strike_line.put.get_price(vol_surface, discount_factor=df)
+                    price_calc = strike_line.put.get_price_from_surface(vol_surface, discount_factor=df)
                     res.append((expiry, strike_line.strike, 'Put', price, price_calc-price))
         return res, ['Expiry', 'Strike', 'Type', 'Price', 'Error']
     
@@ -182,11 +182,11 @@ class ListedOptionsConstruct(VolSurfaceConstruct):
             expiry, df = strike_slice.expiry, strike_slice.discount_factor
             ref_option = strike_slice.lines[0].call
             fwd_price = ref_option.get_forward_price(self.date)
-            expiry_dcf = ref_option.get_expiry_dcf(self.date)
-            vol_atm = vol_surface.get_strike_vol(expiry_dcf, fwd_price, fwd_price)
+            tau = ref_option.get_tau(self.date)
+            vol_atm = vol_surface.get_strike_vol(tau, fwd_price, fwd_price)
             surface_points.append((expiry, fwd_price, vol_atm, None, None))
             for strike_line in strike_slice.lines:
-                vol_k = vol_surface.get_strike_vol(expiry_dcf, strike_line.strike, fwd_price)
+                vol_k = vol_surface.get_strike_vol(tau, strike_line.strike, fwd_price)
                 row = [expiry, strike_line.strike, vol_k, None, None]
                 if strike_line.call.is_valid_price(self.date):
                     row[3] = strike_line.call.get_implied_volatility(self.date, discount_factor=df)
@@ -202,7 +202,7 @@ class ListedOptionsConstruct(VolSurfaceConstruct):
             expiry, df = strike_slice.expiry, strike_slice.discount_factor
             for strike_line in strike_slice.lines:
                 call_greeks = strike_line.call.get_greeks(vol_surface, greek_types, discount_factor=df)
-                surface_greeks.append((expiry, strike_line.strike, *call_greeks))
+                surface_greeks.append((expiry, strike_line.strike, *[call_greeks[gt] for gt in greek_types]))
                 put_greeks = strike_line.put.get_greeks(vol_surface, greek_types, discount_factor=df)
-                surface_greeks.append((expiry, strike_line.strike, *put_greeks))
+                surface_greeks.append((expiry, strike_line.strike, *[put_greeks[gt] for gt in greek_types]))
         return surface_greeks, ['Tenor', 'Strike'] + [gt.name for gt in greek_types]

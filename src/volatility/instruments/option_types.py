@@ -9,6 +9,10 @@ class ExerciseStyle(StrEnum):
     American = 'A'
     Bermudan = 'B'
 
+class OptionDeltaType(StrEnum):
+    Spot = 'Spot'
+    Forward = 'Forward'
+
 class OptionGreekType(StrEnum):
     Delta_Black = 'D_BS'
     Gamma_Black = 'G_BS'
