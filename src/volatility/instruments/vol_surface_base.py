@@ -1,6 +1,6 @@
 from pydantic.dataclasses import dataclass
 
-from common.base_class import NameDateClass
+from lib_common.base_class import NameDateClass
 
 
 @dataclass

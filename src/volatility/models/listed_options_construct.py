@@ -3,7 +3,7 @@ import datetime as dtm
 import numpy as np
 import logging
 
-from common.numeric import solver
+from lib_common.numeric import solver
 from volatility.instruments.listed_option import CallOption, PutOption
 from volatility.instruments.option_types import OptionGreekType
 from volatility.lib import black_model, sabr

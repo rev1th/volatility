@@ -2,8 +2,8 @@ from pydantic.dataclasses import dataclass
 import datetime as dtm
 import numpy as np
 
-from common.numeric import solver
-from common.models.base_instrument import BaseInstrument
+from lib_common.numeric import solver
+from lib_common.models.base_instrument import BaseInstrument
 from .construct_types import NumeraireConvention, ATMStrikeType, OptionMoneynessType
 from .vol_surface_construct import VolSurfaceConstruct
 from .vol_surface import VolSurfaceSlices, VolStrikeSlice, PolynomialMoneynessCurve, ROOT_EPS

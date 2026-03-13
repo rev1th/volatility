@@ -1,6 +1,6 @@
 import datetime as dtm
 import pandas as pd
-from common.app import plotter
+from lib_common.app import plotter
 
 def get_surface_figure(data_points: list[tuple[dtm.date, float, float, float]],
                            col_names: list[str], title: str = 'Volatility Surface', **kwargs):

@@ -2,8 +2,8 @@ from pydantic.dataclasses import dataclass
 from dataclasses import field
 import datetime as dtm
 
-from common.models.base_instrument import BaseInstrument
-from common.chrono.daycount import DayCount
+from lib_common.models.base_instrument import BaseInstrument
+from lib_common.chrono.daycount import DayCount
 
 from .option_types import ExerciseStyle
 from .vol_surface_base import VolSurfaceBase

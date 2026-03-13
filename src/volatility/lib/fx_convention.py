@@ -1,7 +1,7 @@
 import numpy as np
 import scipy.stats as scst
 
-from common.numeric import solver
+from lib_common.numeric import solver
 from volatility.models.construct_types import NumeraireConvention, OptionMoneynessType, ATMStrikeType
 from volatility.lib import black_model
 

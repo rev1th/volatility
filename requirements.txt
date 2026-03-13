@@ -1,4 +1,4 @@
 pydantic==2.*
 numpy==1.24.*
 py_lets_be_rational
-# ./../common/dist/common-1.0-py3-none-any.whl
+# git+https://github.com/rev1th/common.git@main#egg=lib_common

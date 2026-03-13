@@ -2,9 +2,9 @@ from pydantic.dataclasses import dataclass
 from typing import ClassVar
 import datetime as dtm
 
-from common.base_class import NameDateClass
-from common.chrono.calendar import CalendarID, CalendarContext
-from common.models.data_series import DataSeries
+from lib_common.base_class import NameDateClass
+from lib_common.chrono.calendar import CalendarID, CalendarContext
+from lib_common.models.data_series import DataSeries
 
 
 FRIDAY_ID = 4
