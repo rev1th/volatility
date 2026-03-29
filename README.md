@@ -6,7 +6,7 @@
 
 # Setup
 ```
-python setup.py clean --all bdist_wheel
-pip uninstall volatility -y
-pip install ..\volatility\dist\volatility-1.0-py3-none-any.whl
+python setup.py clean --all
+python -m build --wheel
+pip install --force-reinstall --no-deps git+https://github.com/rev1th/volatility@main#egg=volatility
 ```

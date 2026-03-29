@@ -18,7 +18,7 @@ class ListedOption(Option):
         return black_model.get_implied_volatility(
                 option_price=self.data[date],
                 forward_price=self.get_forward_price(date),
-                strike=self._strike,
+                strike=self.strike,
                 tau=self.get_tau(date),
                 discount_factor=discount_factor,
                 flag=self._flag)
@@ -36,7 +36,7 @@ class ListedOption(Option):
                    discount_factor: float = 1) -> dict[OptionGreekType, float]:
         forward_price = self.get_forward_price(vol_surface.date)
         tau = self.get_tau(vol_surface.date)
-        strike, c_p_flag = self._strike, self._flag
+        strike, c_p_flag = self.strike, self._flag
         vol_F = vol_surface.get_strike_vol(tau, strike, forward_price)
         if OptionGreekType.Delta_Adapted in greek_types or \
             OptionGreekType.Gamma_Adapted in greek_types:

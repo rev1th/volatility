@@ -74,7 +74,7 @@ class PolynomialMoneynessCurve(VolStrikeSlice):
 
     def __post_init__(self):
         xs, ys, ws = zip(*self._xyw)
-        assert(len(xs) > self._degree, f'Polynomial fit requires more than {self._degree} coordinates')
+        assert len(xs) > self._degree, f'Polynomial fit requires more than {self._degree} coordinates'
         self._polynomial = np.polynomial.Polynomial.fit(xs, ys, w=ws, deg=self._degree)
     
     def get_strike_vol(self, tau: float, strike: float, forward_price: float) -> float:

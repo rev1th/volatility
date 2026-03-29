@@ -26,8 +26,8 @@ class FXOption(Option):
                    discount_factor: float = 1) -> dict[OptionGreekType, float]:
         numeraire = NumeraireConvention.Inverse
         forward_price = self.get_forward_price(vol_surface.date)
-        tau = (self._expiry.date() - vol_surface.date).days / 365
-        strike, c_p_flag = self._strike, self._flag
+        tau = (self.expiry - vol_surface.date).days / 365
+        strike, c_p_flag = self.strike, self._flag
         vol_F = vol_surface.get_strike_vol(tau, strike, forward_price)
         if OptionGreekType.Delta_Adapted in greek_types or \
             OptionGreekType.Gamma_Adapted in greek_types:
